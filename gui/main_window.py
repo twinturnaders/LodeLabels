@@ -1,16 +1,34 @@
-from PySide6.QtCore import Qt
+from pathlib import Path
+
+import win32print
+
+from PySide6.QtCore import (
+    Qt,
+    QSettings,
+)
+
+from PySide6.QtGui import (
+    QCloseEvent,
+    QPixmap,
+)
 
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QComboBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMessageBox,
     QPushButton,
+    QScrollArea,
+    QSpinBox,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -29,24 +47,235 @@ class MainWindow(QMainWindow):
 
         self.backend = backend
 
+        self.settings = QSettings(
+            "MontanaMotherlodes",
+            "LodeLabels"
+        )
+
+        self.load_label_settings()
+
         self.setWindowTitle(
             "LodeLabels"
         )
 
+        # Allow the user to resize freely, while keeping a
+        # reasonable minimum so controls do not become unusable.
+        self.setMinimumSize(
+            720,
+            560
+        )
+
         self.resize(
-            950,
-            700
+            1050,
+            850
         )
 
         self.build_ui()
 
+        self.refresh_printer_list()
+
+        self.restore_window_layout()
+
         self.refresh_session()
-
         self.refresh_history()
-
         self.sync_auto_print_state()
+        self.update_preview()
 
         self.username_input.setFocus()
+
+
+    # ========================================================
+    # SETTINGS
+    # ========================================================
+
+    def load_label_settings(self):
+
+        self.backend.SAFE_MARGIN = int(
+            self.settings.value(
+                "label/safe_margin",
+                self.backend.SAFE_MARGIN
+            )
+        )
+
+        self.backend.VERTICAL_OFFSET = int(
+            self.settings.value(
+                "label/vertical_offset",
+                self.backend.VERTICAL_OFFSET
+            )
+        )
+
+        self.backend.ITEM_FONT_SIZE = int(
+            self.settings.value(
+                "label/item_font_size",
+                self.backend.ITEM_FONT_SIZE
+            )
+        )
+
+        self.backend.BUYER_FONT_SIZE = int(
+            self.settings.value(
+                "label/buyer_font_size",
+                self.backend.BUYER_FONT_SIZE
+            )
+        )
+
+        self.backend.USERNAME_FONT_SIZE = int(
+            self.settings.value(
+                "label/username_font_size",
+                self.backend.USERNAME_FONT_SIZE
+            )
+        )
+
+
+    def save_label_settings(self):
+
+        self.backend.SAFE_MARGIN = (
+            self.safe_margin_spin.value()
+        )
+
+        self.backend.VERTICAL_OFFSET = (
+            self.vertical_offset_spin.value()
+        )
+
+        self.backend.ITEM_FONT_SIZE = (
+            self.item_font_spin.value()
+        )
+
+        self.backend.BUYER_FONT_SIZE = (
+            self.buyer_font_spin.value()
+        )
+
+        self.backend.USERNAME_FONT_SIZE = (
+            self.username_font_spin.value()
+        )
+
+        self.settings.setValue(
+            "label/safe_margin",
+            self.backend.SAFE_MARGIN
+        )
+
+        self.settings.setValue(
+            "label/vertical_offset",
+            self.backend.VERTICAL_OFFSET
+        )
+
+        self.settings.setValue(
+            "label/item_font_size",
+            self.backend.ITEM_FONT_SIZE
+        )
+
+        self.settings.setValue(
+            "label/buyer_font_size",
+            self.backend.BUYER_FONT_SIZE
+        )
+
+        self.settings.setValue(
+            "label/username_font_size",
+            self.backend.USERNAME_FONT_SIZE
+        )
+
+        self.settings.sync()
+
+        self.update_preview()
+
+
+    def reset_layout_defaults(self):
+
+        self.safe_margin_spin.setValue(
+            28
+        )
+
+        self.vertical_offset_spin.setValue(
+            -12
+        )
+
+        self.item_font_spin.setValue(
+            62
+        )
+
+        self.buyer_font_spin.setValue(
+            34
+        )
+
+        self.username_font_spin.setValue(
+            30
+        )
+
+        self.save_label_settings()
+
+        self.status_label.setText(
+            "Label layout restored to defaults."
+        )
+
+
+    # ========================================================
+    # WINDOW / SPLITTER PERSISTENCE
+    # ========================================================
+
+    def restore_window_layout(self):
+
+        geometry = self.settings.value(
+            "window/geometry"
+        )
+
+        if geometry is not None:
+
+            self.restoreGeometry(
+                geometry
+            )
+
+
+        main_splitter_state = self.settings.value(
+            "window/main_splitter"
+        )
+
+        if main_splitter_state is not None:
+
+            self.main_splitter.restoreState(
+                main_splitter_state
+            )
+
+
+        preview_splitter_state = self.settings.value(
+            "window/preview_splitter"
+        )
+
+        if preview_splitter_state is not None:
+
+            self.preview_splitter.restoreState(
+                preview_splitter_state
+            )
+
+
+    def save_window_layout(self):
+
+        self.settings.setValue(
+            "window/geometry",
+            self.saveGeometry()
+        )
+
+        self.settings.setValue(
+            "window/main_splitter",
+            self.main_splitter.saveState()
+        )
+
+        self.settings.setValue(
+            "window/preview_splitter",
+            self.preview_splitter.saveState()
+        )
+
+        self.settings.sync()
+
+
+    def closeEvent(
+        self,
+        event: QCloseEvent
+    ):
+
+        self.save_window_layout()
+
+        super().closeEvent(
+            event
+        )
 
 
     # ========================================================
@@ -55,15 +284,49 @@ class MainWindow(QMainWindow):
 
     def build_ui(self):
 
-        central_widget = QWidget()
+        # ----------------------------------------------------
+        # SCROLLABLE OUTER SHELL
+        # ----------------------------------------------------
+
+        scroll_area = QScrollArea()
+
+        scroll_area.setWidgetResizable(
+            True
+        )
+
+        scroll_area.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+
+        scroll_area.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
 
         self.setCentralWidget(
-            central_widget
+            scroll_area
+        )
+
+
+        content_widget = QWidget()
+
+        scroll_area.setWidget(
+            content_widget
         )
 
 
         main_layout = QVBoxLayout(
-            central_widget
+            content_widget
+        )
+
+        main_layout.setContentsMargins(
+            12,
+            12,
+            12,
+            12
+        )
+
+        main_layout.setSpacing(
+            10
         )
 
 
@@ -147,7 +410,48 @@ class MainWindow(QMainWindow):
 
 
         # ----------------------------------------------------
-        # MANUAL
+        # PRINTER
+        # ----------------------------------------------------
+
+        printer_group = QGroupBox(
+            "Printer"
+        )
+
+        printer_layout = QHBoxLayout(
+            printer_group
+        )
+
+
+        printer_layout.addWidget(
+            QLabel("Windows Printer:")
+        )
+
+
+        self.printer_combo = QComboBox()
+
+
+        self.refresh_printers_button = QPushButton(
+            "Refresh Printers"
+        )
+
+
+        printer_layout.addWidget(
+            self.printer_combo,
+            stretch=1
+        )
+
+        printer_layout.addWidget(
+            self.refresh_printers_button
+        )
+
+
+        main_layout.addWidget(
+            printer_group
+        )
+
+
+        # ----------------------------------------------------
+        # MANUAL LABEL
         # ----------------------------------------------------
 
         manual_group = QGroupBox(
@@ -231,9 +535,12 @@ class MainWindow(QMainWindow):
             "Current Session"
         )
 
-        session_layout = QHBoxLayout(
+        session_outer_layout = QVBoxLayout(
             session_group
         )
+
+
+        session_count_layout = QHBoxLayout()
 
 
         self.item_count_label = QLabel(
@@ -248,11 +555,16 @@ class MainWindow(QMainWindow):
             "Buyers: 0"
         )
 
+        self.next_buyer_label = QLabel(
+            "Next Buyer: B#01"
+        )
+
 
         for label in (
             self.item_count_label,
             self.givvy_count_label,
             self.buyer_count_label,
+            self.next_buyer_label,
         ):
 
             label.setAlignment(
@@ -261,28 +573,330 @@ class MainWindow(QMainWindow):
 
             label.setStyleSheet(
                 """
-                font-size: 18px;
+                font-size: 17px;
                 font-weight: bold;
                 padding: 8px;
                 """
             )
 
 
-        session_layout.addWidget(
+        session_count_layout.addWidget(
             self.item_count_label
         )
 
-        session_layout.addWidget(
+        session_count_layout.addWidget(
             self.givvy_count_label
         )
 
-        session_layout.addWidget(
+        session_count_layout.addWidget(
             self.buyer_count_label
+        )
+
+        session_count_layout.addWidget(
+            self.next_buyer_label
+        )
+
+
+        session_outer_layout.addLayout(
+            session_count_layout
+        )
+
+
+        number_control_layout = QHBoxLayout()
+
+
+        self.set_item_button = QPushButton(
+            "Set Next Item #"
+        )
+
+        self.reset_givvy_button = QPushButton(
+            "Reset Givvy #"
+        )
+
+        self.set_buyer_button = QPushButton(
+            "Set Next Buyer #"
+        )
+
+        self.reset_buyers_button = QPushButton(
+            "Reset Buyer #s"
+        )
+
+        self.reset_session_button = QPushButton(
+            "Reset Session"
+        )
+
+
+        number_control_layout.addWidget(
+            self.set_item_button
+        )
+
+        number_control_layout.addWidget(
+            self.reset_givvy_button
+        )
+
+        number_control_layout.addWidget(
+            self.set_buyer_button
+        )
+
+        number_control_layout.addWidget(
+            self.reset_buyers_button
+        )
+
+        number_control_layout.addWidget(
+            self.reset_session_button
+        )
+
+
+        session_outer_layout.addLayout(
+            number_control_layout
         )
 
 
         main_layout.addWidget(
             session_group
+        )
+
+
+        # ----------------------------------------------------
+        # ADJUSTABLE MAIN WORK AREA
+        # ----------------------------------------------------
+        #
+        # This vertical splitter lets you drag the boundary
+        # between the preview/settings area and label history.
+        #
+
+        self.main_splitter = QSplitter(
+            Qt.Orientation.Vertical
+        )
+
+        self.main_splitter.setChildrenCollapsible(
+            False
+        )
+
+        self.main_splitter.setHandleWidth(
+            7
+        )
+
+
+        # ----------------------------------------------------
+        # PREVIEW + SETTINGS
+        # ----------------------------------------------------
+
+        preview_group = QGroupBox(
+            "Label Preview & Layout"
+        )
+
+        preview_group_layout = QVBoxLayout(
+            preview_group
+        )
+
+
+        # A second splitter lets you resize the preview
+        # and settings columns horizontally.
+        self.preview_splitter = QSplitter(
+            Qt.Orientation.Horizontal
+        )
+
+        self.preview_splitter.setChildrenCollapsible(
+            False
+        )
+
+        self.preview_splitter.setHandleWidth(
+            7
+        )
+
+
+        # LEFT: PREVIEW
+        preview_widget = QWidget()
+
+        preview_left_layout = QVBoxLayout(
+            preview_widget
+        )
+
+
+        self.preview_type_combo = QComboBox()
+
+        self.preview_type_combo.addItems(
+            [
+                "Sale",
+                "Givvy",
+            ]
+        )
+
+
+        preview_left_layout.addWidget(
+            self.preview_type_combo
+        )
+
+
+        self.preview_label = QLabel()
+
+        self.preview_label.setMinimumSize(
+            220,
+            220
+        )
+
+        self.preview_label.setAlignment(
+            Qt.AlignmentFlag.AlignCenter
+        )
+
+        self.preview_label.setStyleSheet(
+            """
+            background: white;
+            border: 1px solid #999999;
+            """
+        )
+
+
+        preview_left_layout.addWidget(
+            self.preview_label,
+            stretch=1
+        )
+
+
+        # RIGHT: SETTINGS
+        settings_widget = QWidget()
+
+        settings_outer_layout = QVBoxLayout(
+            settings_widget
+        )
+
+        settings_layout = QFormLayout()
+
+
+        self.safe_margin_spin = QSpinBox()
+
+        self.safe_margin_spin.setRange(
+            0,
+            100
+        )
+
+        self.safe_margin_spin.setValue(
+            self.backend.SAFE_MARGIN
+        )
+
+
+        self.vertical_offset_spin = QSpinBox()
+
+        self.vertical_offset_spin.setRange(
+            -150,
+            150
+        )
+
+        self.vertical_offset_spin.setSuffix(
+            " px"
+        )
+
+        self.vertical_offset_spin.setValue(
+            self.backend.VERTICAL_OFFSET
+        )
+
+
+        self.item_font_spin = QSpinBox()
+
+        self.item_font_spin.setRange(
+            10,
+            120
+        )
+
+        self.item_font_spin.setValue(
+            self.backend.ITEM_FONT_SIZE
+        )
+
+
+        self.buyer_font_spin = QSpinBox()
+
+        self.buyer_font_spin.setRange(
+            10,
+            100
+        )
+
+        self.buyer_font_spin.setValue(
+            self.backend.BUYER_FONT_SIZE
+        )
+
+
+        self.username_font_spin = QSpinBox()
+
+        self.username_font_spin.setRange(
+            10,
+            100
+        )
+
+        self.username_font_spin.setValue(
+            self.backend.USERNAME_FONT_SIZE
+        )
+
+
+        settings_layout.addRow(
+            "Safe Margin:",
+            self.safe_margin_spin
+        )
+
+        settings_layout.addRow(
+            "Vertical Offset:",
+            self.vertical_offset_spin
+        )
+
+        settings_layout.addRow(
+            "Item/Givvy Font:",
+            self.item_font_spin
+        )
+
+        settings_layout.addRow(
+            "Buyer Font:",
+            self.buyer_font_spin
+        )
+
+        settings_layout.addRow(
+            "Username Font:",
+            self.username_font_spin
+        )
+
+
+        settings_outer_layout.addLayout(
+            settings_layout
+        )
+
+
+        reset_defaults_button = QPushButton(
+            "Reset Layout Defaults"
+        )
+
+        reset_defaults_button.clicked.connect(
+            self.reset_layout_defaults
+        )
+
+
+        settings_outer_layout.addWidget(
+            reset_defaults_button
+        )
+
+        settings_outer_layout.addStretch()
+
+
+        self.preview_splitter.addWidget(
+            preview_widget
+        )
+
+        self.preview_splitter.addWidget(
+            settings_widget
+        )
+
+
+        self.preview_splitter.setStretchFactor(
+            0,
+            2
+        )
+
+        self.preview_splitter.setStretchFactor(
+            1,
+            1
+        )
+
+
+        preview_group_layout.addWidget(
+            self.preview_splitter
         )
 
 
@@ -332,6 +946,11 @@ class MainWindow(QMainWindow):
         )
 
 
+        self.history_table.setMinimumHeight(
+            180
+        )
+
+
         header = (
             self.history_table
             .horizontalHeader()
@@ -366,13 +985,36 @@ class MainWindow(QMainWindow):
             self.refresh_history
         )
 
+
         history_layout.addWidget(
             refresh_button
         )
 
 
-        main_layout.addWidget(
+        # Add both areas to the adjustable vertical splitter.
+        self.main_splitter.addWidget(
+            preview_group
+        )
+
+        self.main_splitter.addWidget(
             history_group
+        )
+
+
+        self.main_splitter.setStretchFactor(
+            0,
+            1
+        )
+
+        self.main_splitter.setStretchFactor(
+            1,
+            1
+        )
+
+
+        main_layout.addWidget(
+            self.main_splitter,
+            stretch=1
         )
 
 
@@ -388,6 +1030,7 @@ class MainWindow(QMainWindow):
             True
         )
 
+
         main_layout.addWidget(
             self.last_event_label
         )
@@ -397,6 +1040,10 @@ class MainWindow(QMainWindow):
             "Ready."
         )
 
+        self.status_label.setWordWrap(
+            True
+        )
+
         self.status_label.setStyleSheet(
             """
             padding: 8px;
@@ -404,6 +1051,7 @@ class MainWindow(QMainWindow):
             border-radius: 4px;
             """
         )
+
 
         main_layout.addWidget(
             self.status_label
@@ -416,6 +1064,14 @@ class MainWindow(QMainWindow):
 
         self.auto_print_checkbox.toggled.connect(
             self.handle_auto_toggle
+        )
+
+        self.printer_combo.currentTextChanged.connect(
+            self.handle_printer_changed
+        )
+
+        self.refresh_printers_button.clicked.connect(
+            self.refresh_printer_list
         )
 
         self.sale_button.clicked.connect(
@@ -435,8 +1091,51 @@ class MainWindow(QMainWindow):
         )
 
 
+        self.set_item_button.clicked.connect(
+            self.choose_next_item_number
+        )
+
+        self.reset_givvy_button.clicked.connect(
+            self.confirm_reset_givvies
+        )
+
+        self.set_buyer_button.clicked.connect(
+            self.choose_next_buyer_number
+        )
+
+        self.reset_buyers_button.clicked.connect(
+            self.confirm_reset_buyers
+        )
+
+        self.reset_session_button.clicked.connect(
+            self.confirm_reset_session
+        )
+
+
+        self.preview_type_combo.currentTextChanged.connect(
+            self.update_preview
+        )
+
+        self.username_input.textChanged.connect(
+            self.update_preview
+        )
+
+
+        for spin_box in (
+            self.safe_margin_spin,
+            self.vertical_offset_spin,
+            self.item_font_spin,
+            self.buyer_font_spin,
+            self.username_font_spin,
+        ):
+
+            spin_box.valueChanged.connect(
+                self.save_label_settings
+            )
+
+
     # ========================================================
-    # HELPERS
+    # GENERAL HELPERS
     # ========================================================
 
     def get_username(self):
@@ -469,6 +1168,126 @@ class MainWindow(QMainWindow):
             f"Buyers: "
             f"{len(self.backend.buyers)}"
         )
+
+        self.next_buyer_label.setText(
+            f"Next Buyer: "
+            f"B#{self.backend.get_next_buyer_number():02d}"
+        )
+
+
+    # ========================================================
+    # LIVE PREVIEW
+    # ========================================================
+
+    def update_preview(
+        self,
+        *args
+    ):
+
+        username = (
+            self.get_username()
+            or "sample_buyer"
+        )
+
+
+        if username in self.backend.buyers:
+
+            buyer_number = (
+                self.backend
+                .buyers[username]
+            )
+
+        else:
+
+            buyer_number = (
+                self.backend
+                .get_next_buyer_number()
+            )
+
+
+        preview_type = (
+            self.preview_type_combo
+            .currentText()
+        )
+
+
+        if preview_type == "Givvy":
+
+            sequence_number = (
+                self.backend.givvy_number
+                + 1
+            )
+
+            top_text = (
+                f"GIVVY "
+                f"{sequence_number:02d}"
+            )
+
+        else:
+
+            sequence_number = (
+                self.backend.item_number
+                + 1
+            )
+
+            top_text = (
+                f"ITEM "
+                f"{sequence_number:03d}"
+            )
+
+
+        preview_dir = Path(
+            "data"
+        )
+
+        preview_dir.mkdir(
+            exist_ok=True
+        )
+
+
+        preview_path = (
+            preview_dir
+            / "preview.png"
+        )
+
+
+        try:
+
+            self.backend.create_text_label(
+                top_text,
+                buyer_number,
+                username,
+                preview_path,
+            )
+
+
+            pixmap = QPixmap(
+                str(preview_path)
+            )
+
+
+            available_size = (
+                self.preview_label.size()
+            )
+
+
+            pixmap = pixmap.scaled(
+                available_size,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+
+
+            self.preview_label.setPixmap(
+                pixmap
+            )
+
+
+        except Exception as error:
+
+            self.preview_label.setText(
+                f"Preview error:\n{error}"
+            )
 
 
     # ========================================================
@@ -615,7 +1434,6 @@ class MainWindow(QMainWindow):
                 )
             )
 
-
         except Exception as error:
 
             self.status_label.setText(
@@ -631,12 +1449,10 @@ class MainWindow(QMainWindow):
             "Label reprinted."
         )
 
-
         self.last_event_label.setText(
             f"Reprinted "
             f"@{record['username']}"
         )
-
 
         self.refresh_history()
 
@@ -718,6 +1534,231 @@ class MainWindow(QMainWindow):
         )
 
 
+
+    # ========================================================
+    # PRINTERS
+    # ========================================================
+
+    def get_windows_printers(
+        self
+    ):
+
+        flags = (
+            win32print.PRINTER_ENUM_LOCAL
+            | win32print.PRINTER_ENUM_CONNECTIONS
+        )
+
+
+        try:
+
+            printer_info = (
+                win32print.EnumPrinters(
+                    flags,
+                    None,
+                    1,
+                )
+            )
+
+        except Exception as error:
+
+            print(
+                f"Could not enumerate printers: "
+                f"{error!r}"
+            )
+
+            return []
+
+
+        printer_names = {
+            printer[2]
+            for printer in printer_info
+            if len(printer) > 2
+            and printer[2]
+        }
+
+
+        return sorted(
+            printer_names,
+            key=str.lower,
+        )
+
+
+    def get_default_printer_name(
+        self
+    ):
+
+        try:
+
+            return (
+                win32print.GetDefaultPrinter()
+            )
+
+        except Exception:
+
+            return None
+
+
+    def refresh_printer_list(
+        self
+    ):
+
+        printers = (
+            self.get_windows_printers()
+        )
+
+
+        saved_printer = (
+            self.settings.value(
+                "printer/name",
+                ""
+            )
+            or ""
+        )
+
+
+        preferred_printer = (
+            saved_printer
+            or self.backend.PRINTER_NAME
+        )
+
+
+        default_printer = (
+            self.get_default_printer_name()
+        )
+
+
+        self.printer_combo.blockSignals(
+            True
+        )
+
+        self.printer_combo.clear()
+
+
+        if not printers:
+
+            self.printer_combo.addItem(
+                "No Windows printers found"
+            )
+
+            self.printer_combo.setEnabled(
+                False
+            )
+
+            self.printer_combo.blockSignals(
+                False
+            )
+
+            self.status_label.setText(
+                "No Windows printers found."
+            )
+
+            return
+
+
+        self.printer_combo.setEnabled(
+            True
+        )
+
+
+        self.printer_combo.addItems(
+            printers
+        )
+
+
+        if preferred_printer in printers:
+
+            selected_printer = (
+                preferred_printer
+            )
+
+        elif default_printer in printers:
+
+            selected_printer = (
+                default_printer
+            )
+
+        else:
+
+            selected_printer = (
+                printers[0]
+            )
+
+
+        index = (
+            self.printer_combo
+            .findText(
+                selected_printer
+            )
+        )
+
+
+        self.printer_combo.setCurrentIndex(
+            index
+        )
+
+
+        self.printer_combo.blockSignals(
+            False
+        )
+
+
+        self.backend.PRINTER_NAME = (
+            selected_printer
+        )
+
+
+        self.settings.setValue(
+            "printer/name",
+            selected_printer
+        )
+
+        self.settings.sync()
+
+
+        self.status_label.setText(
+            f"Printer selected: "
+            f"{selected_printer}"
+        )
+
+
+    def handle_printer_changed(
+        self,
+        printer_name
+    ):
+
+        printer_name = (
+            printer_name.strip()
+        )
+
+
+        if (
+            not printer_name
+            or printer_name
+            == "No Windows printers found"
+        ):
+
+            return
+
+
+        self.backend.PRINTER_NAME = (
+            printer_name
+        )
+
+
+        self.settings.setValue(
+            "printer/name",
+            printer_name
+        )
+
+        self.settings.sync()
+
+
+        self.status_label.setText(
+            f"Printer selected: "
+            f"{printer_name}"
+        )
+
+
     # ========================================================
     # LISTENER
     # ========================================================
@@ -767,11 +1808,11 @@ class MainWindow(QMainWindow):
                 username
             )
 
-
         except Exception as error:
 
             self.refresh_session()
             self.refresh_history()
+            self.update_preview()
 
             self.status_label.setText(
                 f"Sale error: {error}"
@@ -781,7 +1822,6 @@ class MainWindow(QMainWindow):
 
 
         self.refresh_session()
-
         self.refresh_history()
 
 
@@ -797,8 +1837,9 @@ class MainWindow(QMainWindow):
 
 
         self.username_input.clear()
-
         self.username_input.setFocus()
+
+        self.update_preview()
 
 
     # ========================================================
@@ -825,11 +1866,11 @@ class MainWindow(QMainWindow):
                 username
             )
 
-
         except Exception as error:
 
             self.refresh_session()
             self.refresh_history()
+            self.update_preview()
 
             self.status_label.setText(
                 f"Givvy error: {error}"
@@ -839,7 +1880,6 @@ class MainWindow(QMainWindow):
 
 
         self.refresh_session()
-
         self.refresh_history()
 
 
@@ -855,8 +1895,9 @@ class MainWindow(QMainWindow):
 
 
         self.username_input.clear()
-
         self.username_input.setFocus()
+
+        self.update_preview()
 
 
     # ========================================================
@@ -885,11 +1926,11 @@ class MainWindow(QMainWindow):
                 )
             )
 
-
         except Exception as error:
 
             self.refresh_session()
             self.refresh_history()
+            self.update_preview()
 
             self.status_label.setText(
                 f"Auto sale error: {error}"
@@ -909,8 +1950,8 @@ class MainWindow(QMainWindow):
 
 
         self.refresh_session()
-
         self.refresh_history()
+        self.update_preview()
 
 
         self.last_event_label.setText(
@@ -950,6 +1991,7 @@ class MainWindow(QMainWindow):
 
             self.refresh_session()
             self.refresh_history()
+            self.update_preview()
 
             self.status_label.setText(
                 f"F8 sale error: {error}"
@@ -960,6 +2002,7 @@ class MainWindow(QMainWindow):
 
         self.refresh_session()
         self.refresh_history()
+        self.update_preview()
 
 
         self.last_event_label.setText(
@@ -988,6 +2031,7 @@ class MainWindow(QMainWindow):
 
             self.refresh_session()
             self.refresh_history()
+            self.update_preview()
 
             self.status_label.setText(
                 f"Givvy error: {error}"
@@ -998,6 +2042,7 @@ class MainWindow(QMainWindow):
 
         self.refresh_session()
         self.refresh_history()
+        self.update_preview()
 
 
         self.last_event_label.setText(
@@ -1014,7 +2059,6 @@ class MainWindow(QMainWindow):
         try:
 
             self.backend.test_print_latest_label()
-
 
         except Exception as error:
 
@@ -1035,26 +2079,278 @@ class MainWindow(QMainWindow):
 
 
     # ========================================================
-    # RESET
+    # SET / RESET NUMBER DIALOGS
     # ========================================================
 
-    def handle_reset_items(self):
+    def choose_next_item_number(
+        self
+    ):
+
+        suggested_number = (
+            self.backend.item_number
+            + 1
+        )
+
+
+        number, accepted = (
+            QInputDialog.getInt(
+                self,
+                "Set Next Item Number",
+                (
+                    "What number should the "
+                    "NEXT sale use?"
+                ),
+                suggested_number,
+                1,
+                999999,
+                1,
+            )
+        )
+
+
+        if not accepted:
+            return
+
+
+        self.backend.set_next_item_number(
+            number
+        )
+
+        self.refresh_session()
+        self.update_preview()
+
+
+        self.status_label.setText(
+            f"Next sale will be "
+            f"Item {number:03d}."
+        )
+
+
+    def choose_next_buyer_number(
+        self
+    ):
+
+        suggested_number = (
+            self.backend
+            .get_next_buyer_number()
+        )
+
+
+        number, accepted = (
+            QInputDialog.getInt(
+                self,
+                "Set Next Buyer Number",
+                (
+                    "What number should the "
+                    "NEXT NEW buyer receive?"
+                ),
+                suggested_number,
+                1,
+                99999,
+                1,
+            )
+        )
+
+
+        if not accepted:
+            return
+
+
+        existing_username = None
+
+
+        for username, buyer_number in (
+            self.backend.buyers.items()
+        ):
+
+            if buyer_number == number:
+
+                existing_username = username
+                break
+
+
+        if existing_username is not None:
+
+            answer = QMessageBox.warning(
+                self,
+                "Buyer Number Already Assigned",
+                (
+                    f"B#{number:02d} is currently assigned "
+                    f"to @{existing_username}.\n\n"
+                    "Using it again would create two active "
+                    "buyers with the same buyer number.\n\n"
+                    "Set it anyway?"
+                ),
+                (
+                    QMessageBox.StandardButton.Yes
+                    | QMessageBox.StandardButton.No
+                ),
+                QMessageBox.StandardButton.No,
+            )
+
+
+            if (
+                answer
+                != QMessageBox.StandardButton.Yes
+            ):
+
+                return
+
+
+        self.backend.set_next_buyer_number(
+            number
+        )
+
+        self.refresh_session()
+        self.update_preview()
+
+
+        self.status_label.setText(
+            f"Next new buyer will be "
+            f"B#{number:02d}."
+        )
+
+
+    def confirm_reset_givvies(
+        self
+    ):
+
+        answer = QMessageBox.question(
+            self,
+            "Reset Givvy Number?",
+            (
+                "Reset the givvy number to 0?\n\n"
+                "The next givvy will be Givvy 01.\n"
+                "Label history will NOT be deleted."
+            ),
+            (
+                QMessageBox.StandardButton.Yes
+                | QMessageBox.StandardButton.No
+            ),
+            QMessageBox.StandardButton.No,
+        )
+
+
+        if answer == QMessageBox.StandardButton.Yes:
+
+            self.handle_reset_givvies()
+
+
+    def confirm_reset_buyers(
+        self
+    ):
+
+        answer = QMessageBox.question(
+            self,
+            "Reset Buyer Numbers?",
+            (
+                "Clear ALL current buyer-number assignments?\n\n"
+                "The next buyer will become B#01.\n"
+                "Existing label history will NOT be deleted."
+            ),
+            (
+                QMessageBox.StandardButton.Yes
+                | QMessageBox.StandardButton.No
+            ),
+            QMessageBox.StandardButton.No,
+        )
+
+
+        if answer == QMessageBox.StandardButton.Yes:
+
+            self.handle_reset_buyers()
+
+
+    def confirm_reset_session(
+        self
+    ):
+
+        answer = QMessageBox.question(
+            self,
+            "Reset Entire Session?",
+            (
+                "Reset ALL current session counters?\n\n"
+                "• Item number → 0\n"
+                "• Givvy number → 0\n"
+                "• Buyer assignments → cleared\n"
+                "• Next buyer → B#01\n\n"
+                "SQLite label history will NOT be deleted."
+            ),
+            (
+                QMessageBox.StandardButton.Yes
+                | QMessageBox.StandardButton.No
+            ),
+            QMessageBox.StandardButton.No,
+        )
+
+
+        if answer == QMessageBox.StandardButton.Yes:
+
+            self.handle_reset_session()
+
+
+    # ========================================================
+    # RESET ACTIONS
+    # ========================================================
+
+    def handle_reset_items(
+        self
+    ):
 
         self.backend.reset_item_number()
 
         self.refresh_session()
+        self.update_preview()
 
         self.status_label.setText(
-            "Item number reset to 0."
+            "Item number reset. "
+            "Next sale will be Item 001."
         )
 
 
-    def handle_reset_givvies(self):
+    def handle_reset_givvies(
+        self
+    ):
 
         self.backend.reset_givvy_number()
 
         self.refresh_session()
+        self.update_preview()
 
         self.status_label.setText(
-            "Givvy number reset to 0."
+            "Givvy number reset. "
+            "Next givvy will be Givvy 01."
+        )
+
+
+    def handle_reset_buyers(
+        self
+    ):
+
+        self.backend.reset_buyer_numbers()
+
+        self.refresh_session()
+        self.update_preview()
+
+        self.status_label.setText(
+            "Buyer assignments reset. "
+            "Next buyer will be B#01."
+        )
+
+
+    def handle_reset_session(
+        self
+    ):
+
+        self.backend.reset_session()
+
+        self.refresh_session()
+        self.update_preview()
+
+        self.status_label.setText(
+            "Session reset. History preserved."
+        )
+
+        self.last_event_label.setText(
+            "New session started."
         )

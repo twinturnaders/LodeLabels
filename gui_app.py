@@ -37,7 +37,8 @@ class AppBridge(QObject):
 
     toggle_auto_requested = Signal()
 
-    reset_items_requested = Signal()
+    set_next_item_requested = Signal()
+
     reset_givvies_requested = Signal()
 
 
@@ -92,12 +93,12 @@ def main():
         window.toggle_auto_print_from_hotkey
     )
 
-    bridge.reset_items_requested.connect(
-        window.handle_reset_items
+    bridge.set_next_item_requested.connect(
+        window.choose_next_item_number
     )
 
     bridge.reset_givvies_requested.connect(
-        window.handle_reset_givvies
+        window.confirm_reset_givvies
     )
 
 
@@ -127,7 +128,7 @@ def main():
 
     keyboard.add_hotkey(
         "ctrl+r",
-        bridge.reset_items_requested.emit
+        bridge.set_next_item_requested.emit
     )
 
     keyboard.add_hotkey(
@@ -166,7 +167,8 @@ def main():
         )
 
         print(
-            f"Listener startup error: {error!r}"
+            f"Listener startup error: "
+            f"{error!r}"
         )
 
 
@@ -185,8 +187,8 @@ def main():
             keyboard.unhook_all()
 
         except Exception:
-            pass
 
+            pass
 
         if sale_server is not None:
 
@@ -195,6 +197,7 @@ def main():
                 sale_server.shutdown()
 
             except Exception:
+
                 pass
 
             try:
@@ -202,6 +205,7 @@ def main():
                 sale_server.server_close()
 
             except Exception:
+
                 pass
 
 
@@ -210,7 +214,7 @@ def main():
     )
 
 
-    # Keep objects alive.
+    # Keep them alive for the lifetime of the app.
     window.app_bridge = bridge
     window.sale_server = sale_server
 
@@ -224,4 +228,5 @@ def main():
 
 
 if __name__ == "__main__":
+
     main()

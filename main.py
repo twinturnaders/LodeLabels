@@ -1,19 +1,46 @@
 import json
 from datetime import date
 from pathlib import Path
+from threading import Lock
 
 import keyboard
 import pyperclip
 import win32ui
-from PIL import Image, ImageDraw, ImageFont, ImageWin
+
+from PIL import (
+    Image,
+    ImageDraw,
+    ImageFont,
+    ImageWin,
+)
+
 from sale_listener import start_sale_listener
+
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
 
 PRINTER_NAME = "PPG A40 SD"
 
+PRINTER_DPI = 203
 
-# -------------------------
-# Folder / file setup
-# -------------------------
+# 2 inches × 203 DPI = 406 px
+LABEL_SIZE = int(2 * PRINTER_DPI)
+
+SAFE_MARGIN = 28
+
+# Moves all text slightly upward
+VERTICAL_OFFSET = -12
+
+ITEM_FONT_SIZE = 62
+BUYER_FONT_SIZE = 34
+USERNAME_FONT_SIZE = 30
+
+
+# ============================================================
+# DIRECTORIES
+# ============================================================
 
 LABELS_DIR = Path("labels")
 LABELS_DIR.mkdir(exist_ok=True)
@@ -21,545 +48,636 @@ LABELS_DIR.mkdir(exist_ok=True)
 SESSIONS_DIR = Path("sessions")
 SESSIONS_DIR.mkdir(exist_ok=True)
 
+
 current_date = date.today().isoformat()
-SESSION_FILE = SESSIONS_DIR / f"session_{current_date}.json"
+
+SESSION_FILE = (
+    SESSIONS_DIR
+    / f"session_{current_date}.json"
+)
 
 
-# -------------------------
-# Label settings
-# -------------------------
+# ============================================================
+# SESSION STATE
+# ============================================================
 
-PRINTER_DPI = 203
-LABEL_SIZE = int(2 * PRINTER_DPI)  # 2" x 2" = 406 px at 203 DPI
+# Prevent two different inputs from modifying the session
+# at exactly the same time.
+session_lock = Lock()
 
-SAFE_MARGIN = 28
-VERTICAL_OFFSET = -12
-
-ITEM_FONT_SIZE = 62
-BUYER_FONT_SIZE = 34
-USERNAME_FONT_SIZE = 30
-
-buyers = ...
-item_number = ...
-givvy_number = ...
-
-auto_print_enabled = False
-# -------------------------
-# Printing
-# -------------------------
-
-def print_label(file_path):
-    try:
-        printer_dc = win32ui.CreateDC()
-        printer_dc.CreatePrinterDC(PRINTER_NAME)
-
-        printable_width = printer_dc.GetDeviceCaps(8)    # HORZRES
-        printable_height = printer_dc.GetDeviceCaps(10)  # VERTRES
-
-        image = Image.open(file_path).convert("RGB")
-        image_width, image_height = image.size
-
-        scale = min(
-            printable_width / image_width,
-            printable_height / image_height
-        )
-
-        print_width = int(image_width * scale)
-        print_height = int(image_height * scale)
-
-        x = (printable_width - print_width) // 2
-        y = ((printable_height - print_height) // 2) + VERTICAL_OFFSET
-
-        dib = ImageWin.Dib(image)
-
-        printer_dc.StartDoc("LodeLabels")
-        printer_dc.StartPage()
-
-        dib.draw(
-            printer_dc.GetHandleOutput(),
-            (
-                x,
-                y,
-                x + print_width,
-                y + print_height
-            )
-        )
-
-        printer_dc.EndPage()
-        printer_dc.EndDoc()
-        printer_dc.DeleteDC()
-
-        print(f"Printed successfully to {PRINTER_NAME}")
-        return True
-
-    except Exception as error:
-        print(f"Printing failed: {error}")
-        return False
-
-
-def test_print_latest_label():
-    label_files = sorted(LABELS_DIR.glob("*.png"))
-
-    if not label_files:
-        print("No label files found to print.")
-        return
-
-    latest_label = label_files[-1]
-
-    print(f"Printing latest label: {latest_label}")
-    print_label(latest_label)
-
-
-# -------------------------
-# Session persistence
-# -------------------------
 
 def load_session():
+
     if not SESSION_FILE.exists():
+
         return {
             "item_number": 0,
             "givvy_number": 0,
-            "buyers": {}
+            "buyers": {},
         }
 
-    with open(SESSION_FILE, "r") as file:
-        return json.load(file)
+    try:
+
+        with SESSION_FILE.open(
+            "r",
+            encoding="utf-8",
+        ) as file:
+
+            data = json.load(file)
+
+    except (
+        json.JSONDecodeError,
+        OSError,
+    ):
+
+        print(
+            "Warning: Could not read session file."
+        )
+
+        return {
+            "item_number": 0,
+            "givvy_number": 0,
+            "buyers": {},
+        }
+
+
+    # Backward compatibility with old sessions
+    return {
+        "item_number": data.get(
+            "item_number",
+            0,
+        ),
+        "givvy_number": data.get(
+            "givvy_number",
+            0,
+        ),
+        "buyers": data.get(
+            "buyers",
+            {},
+        ),
+    }
 
 
 session = load_session()
 
-buyers = session.get("buyers", {})
-item_number = session.get("item_number", 0)
-givvy_number = session.get("givvy_number", 0)
+buyers = session.get(
+    "buyers",
+    {},
+)
+
+item_number = session.get(
+    "item_number",
+    0,
+)
+
+givvy_number = session.get(
+    "givvy_number",
+    0,
+)
+
+
+# Automatic Whatnot sales start disabled
+auto_print_enabled = False
 
 
 def save_session():
-    session_data = {
+
+    data = {
         "item_number": item_number,
         "givvy_number": givvy_number,
-        "buyers": buyers
+        "buyers": buyers,
     }
 
-    with open(SESSION_FILE, "w") as file:
-        json.dump(session_data, file, indent=4)
+    with SESSION_FILE.open(
+        "w",
+        encoding="utf-8",
+    ) as file:
+
+        json.dump(
+            data,
+            file,
+            indent=4,
+        )
 
 
+# Upgrade older session files immediately.
 save_session()
 
 
-# -------------------------
-# Clipboard input
-# -------------------------
-
-def get_clipboard_text():
-    return pyperclip.paste().strip()
-
-
-# -------------------------
-# Buyer logic
-# -------------------------
+# ============================================================
+# BUYER MANAGEMENT
+# ============================================================
 
 def get_next_buyer_number():
+
     if not buyers:
         return 1
 
-    return max(buyers.values()) + 1
+    return max(
+        buyers.values()
+    ) + 1
 
 
 def get_buyer_number(username):
-    if username in buyers:
-        return buyers[username]
 
-    buyer_number = get_next_buyer_number()
-    buyers[username] = buyer_number
+    if username not in buyers:
 
-    save_session()
+        buyers[username] = (
+            get_next_buyer_number()
+        )
 
-    return buyer_number
+    return buyers[username]
 
 
-# -------------------------
-# Counter controls
-# -------------------------
+# ============================================================
+# USERNAME CLEANUP
+# ============================================================
 
-def reset_item_number(number=0):
-    global item_number
+def clean_username(username):
 
-    item_number = number
-    save_session()
-
-    print(f"Item number set to {item_number}.")
-
-
-def reset_givvy_number(number=0):
-    global givvy_number
-
-    givvy_number = number
-    save_session()
-
-    print(f"Givvy number set to {givvy_number}.")
-
-
-# -------------------------
-# Font / text helpers
-# -------------------------
-
-def load_font(size, bold=False):
-    font_names = [
-        "arialbd.ttf" if bold else "arial.ttf",
-        "segoeuib.ttf" if bold else "segoeui.ttf",
-        "calibrib.ttf" if bold else "calibri.ttf"
-    ]
-
-    for font_name in font_names:
-        try:
-            return ImageFont.truetype(font_name, size)
-        except OSError:
-            continue
-
-    print("Warning: Could not load TrueType font. Using default font.")
-    return ImageFont.load_default()
-
-
-def get_text_size(draw, text, font):
-    bbox = draw.textbbox((0, 0), text, font=font)
-
-    width = bbox[2] - bbox[0]
-    height = bbox[3] - bbox[1]
-
-    return width, height
-
-
-def centered_x(draw, text, font):
-    text_width, _ = get_text_size(draw, text, font)
-    return (LABEL_SIZE - text_width) // 2
-
-
-def fit_font(draw, text, start_size, min_size, max_width, bold=False):
-    font_size = start_size
-
-    while font_size >= min_size:
-        font = load_font(font_size, bold=bold)
-        text_width, _ = get_text_size(draw, text, font)
-
-        if text_width <= max_width:
-            return font
-
-        font_size -= 2
-
-    return load_font(min_size, bold=bold)
-
-
-# -------------------------
-# Filename helper
-# -------------------------
-
-def sanitize_filename(text):
-    safe_text = "".join(
-        char if char.isalnum() or char in ("-", "_") else "_"
-        for char in text
-    )
-
-    return safe_text[:50]
-
-
-# -------------------------
-# Regular sale label
-# -------------------------
-
-def create_label(item_number, buyer_number, username):
-    image = Image.new(
-        "RGB",
-        (LABEL_SIZE, LABEL_SIZE),
-        "white"
-    )
-
-    draw = ImageDraw.Draw(image)
-
-    item_text = f"ITEM {item_number:03d}"
-    buyer_text = f"B#{buyer_number:02d}"
-    username_text = f"@{username}"
-
-    safe_width = LABEL_SIZE - (SAFE_MARGIN * 2)
-
-    item_font = fit_font(
-        draw,
-        item_text,
-        start_size=ITEM_FONT_SIZE,
-        min_size=28,
-        max_width=safe_width - 20,
-        bold=True
-    )
-
-    buyer_font = fit_font(
-        draw,
-        buyer_text,
-        start_size=BUYER_FONT_SIZE,
-        min_size=20,
-        max_width=safe_width - 40,
-        bold=True
-    )
-
-    username_font = fit_font(
-        draw,
-        username_text,
-        start_size=USERNAME_FONT_SIZE,
-        min_size=18,
-        max_width=safe_width - 30,
-        bold=False
-    )
-
-    _, item_height = get_text_size(
-        draw,
-        item_text,
-        item_font
-    )
-
-    _, buyer_height = get_text_size(
-        draw,
-        buyer_text,
-        buyer_font
-    )
-
-    _, username_height = get_text_size(
-        draw,
-        username_text,
-        username_font
-    )
-
-    gap_1 = 18
-    gap_2 = 12
-
-    total_height = (
-        item_height
-        + gap_1
-        + buyer_height
-        + gap_2
-        + username_height
-    )
-
-    start_y = (
-        (LABEL_SIZE - total_height) // 2
-    ) + VERTICAL_OFFSET
-
-    item_x = centered_x(
-        draw,
-        item_text,
-        item_font
-    )
-    item_y = start_y
-
-    buyer_x = centered_x(
-        draw,
-        buyer_text,
-        buyer_font
-    )
-    buyer_y = item_y + item_height + gap_1
-
-    username_x = centered_x(
-        draw,
-        username_text,
-        username_font
-    )
-    username_y = buyer_y + buyer_height + gap_2
-
-    draw.text(
-        (item_x, item_y),
-        item_text,
-        font=item_font,
-        fill="black"
-    )
-
-    draw.text(
-        (buyer_x, buyer_y),
-        buyer_text,
-        font=buyer_font,
-        fill="black"
-    )
-
-    draw.text(
-        (username_x, username_y),
-        username_text,
-        font=username_font,
-        fill="black"
-    )
-
-    safe_username = sanitize_filename(username)
-
-    file_path = LABELS_DIR / (
-        f"item_{item_number:03d}_"
-        f"buyer_{buyer_number:02d}_"
-        f"{safe_username}.png"
-    )
-
-    image.save(file_path)
-
-    return file_path
-
-
-# -------------------------
-# Giveaway label
-# -------------------------
-
-def create_givvy_label(givvy_number, buyer_number, username):
-    image = Image.new(
-        "RGB",
-        (LABEL_SIZE, LABEL_SIZE),
-        "white"
-    )
-
-    draw = ImageDraw.Draw(image)
-
-    givvy_text = f"GIVVY {givvy_number:02d}"
-    buyer_text = f"B#{buyer_number:02d}"
-    username_text = f"@{username}"
-
-    safe_width = LABEL_SIZE - (SAFE_MARGIN * 2)
-
-    givvy_font = fit_font(
-        draw,
-        givvy_text,
-        start_size=ITEM_FONT_SIZE,
-        min_size=28,
-        max_width=safe_width - 20,
-        bold=True
-    )
-
-    buyer_font = fit_font(
-        draw,
-        buyer_text,
-        start_size=BUYER_FONT_SIZE,
-        min_size=20,
-        max_width=safe_width - 40,
-        bold=True
-    )
-
-    username_font = fit_font(
-        draw,
-        username_text,
-        start_size=USERNAME_FONT_SIZE,
-        min_size=18,
-        max_width=safe_width - 30,
-        bold=False
-    )
-
-    _, givvy_height = get_text_size(
-        draw,
-        givvy_text,
-        givvy_font
-    )
-
-    _, buyer_height = get_text_size(
-        draw,
-        buyer_text,
-        buyer_font
-    )
-
-    _, username_height = get_text_size(
-        draw,
-        username_text,
-        username_font
-    )
-
-    gap_1 = 18
-    gap_2 = 12
-
-    total_height = (
-        givvy_height
-        + gap_1
-        + buyer_height
-        + gap_2
-        + username_height
-    )
-
-    start_y = (
-        (LABEL_SIZE - total_height) // 2
-    ) + VERTICAL_OFFSET
-
-    givvy_x = centered_x(
-        draw,
-        givvy_text,
-        givvy_font
-    )
-    givvy_y = start_y
-
-    buyer_x = centered_x(
-        draw,
-        buyer_text,
-        buyer_font
-    )
-    buyer_y = givvy_y + givvy_height + gap_1
-
-    username_x = centered_x(
-        draw,
-        username_text,
-        username_font
-    )
-    username_y = buyer_y + buyer_height + gap_2
-
-    draw.text(
-        (givvy_x, givvy_y),
-        givvy_text,
-        font=givvy_font,
-        fill="black"
-    )
-
-    draw.text(
-        (buyer_x, buyer_y),
-        buyer_text,
-        font=buyer_font,
-        fill="black"
-    )
-
-    draw.text(
-        (username_x, username_y),
-        username_text,
-        font=username_font,
-        fill="black"
-    )
-
-    safe_username = sanitize_filename(username)
-
-    file_path = LABELS_DIR / (
-        f"givvy_{givvy_number:02d}_"
-        f"buyer_{buyer_number:02d}_"
-        f"{safe_username}.png"
-    )
-
-    image.save(file_path)
-
-    return file_path
-
-
-# -------------------------
-# Regular sale event
-# -------------------------
-
-def process_sale(username):
-    global item_number
+    if username is None:
+        return ""
 
     username = username.strip()
 
     if username.startswith("@"):
         username = username[1:]
 
-    if username == "":
-        print("No username provided.")
-        return
+    return username.strip()
 
-    buyer_number = get_buyer_number(username)
 
-    item_number += 1
+def get_clipboard_text():
 
-    save_session()
+    try:
+        return clean_username(
+            pyperclip.paste()
+        )
 
-    label_path = create_label(
-        item_number,
+    except Exception as error:
+
+        print(
+            f"Clipboard error: {error!r}"
+        )
+
+        return ""
+
+
+# ============================================================
+# FONT HELPERS
+# ============================================================
+
+def load_font(
+    size,
+    bold=False,
+):
+
+    font_names = [
+
+        (
+            "arialbd.ttf"
+            if bold
+            else "arial.ttf"
+        ),
+
+        (
+            "segoeuib.ttf"
+            if bold
+            else "segoeui.ttf"
+        ),
+
+        (
+            "calibrib.ttf"
+            if bold
+            else "calibri.ttf"
+        ),
+    ]
+
+
+    for font_name in font_names:
+
+        try:
+
+            return ImageFont.truetype(
+                font_name,
+                size,
+            )
+
+        except OSError:
+            continue
+
+
+    print(
+        "Warning: Could not load "
+        "TrueType font. Using default."
+    )
+
+    return ImageFont.load_default()
+
+
+def fit_font(
+    draw,
+    text,
+    starting_size,
+    max_width,
+    bold=False,
+):
+
+    size = starting_size
+
+    while size >= 10:
+
+        font = load_font(
+            size,
+            bold=bold,
+        )
+
+        bbox = draw.textbbox(
+            (0, 0),
+            text,
+            font=font,
+        )
+
+        width = (
+            bbox[2]
+            - bbox[0]
+        )
+
+        if width <= max_width:
+            return font
+
+        size -= 2
+
+
+    return load_font(
+        10,
+        bold=bold,
+    )
+
+
+# ============================================================
+# LABEL RENDERING
+# ============================================================
+
+def create_text_label(
+    top_text,
+    buyer_number,
+    username,
+    output_path,
+):
+
+    image = Image.new(
+        "RGB",
+        (
+            LABEL_SIZE,
+            LABEL_SIZE,
+        ),
+        "white",
+    )
+
+    draw = ImageDraw.Draw(
+        image
+    )
+
+
+    buyer_text = (
+        f"B#{buyer_number:02d}"
+    )
+
+    username_text = (
+        f"@{username}"
+    )
+
+
+    max_width = (
+        LABEL_SIZE
+        - (SAFE_MARGIN * 2)
+    )
+
+
+    top_font = fit_font(
+        draw,
+        top_text,
+        ITEM_FONT_SIZE,
+        max_width,
+        bold=True,
+    )
+
+    buyer_font = fit_font(
+        draw,
+        buyer_text,
+        BUYER_FONT_SIZE,
+        max_width,
+        bold=True,
+    )
+
+    username_font = fit_font(
+        draw,
+        username_text,
+        USERNAME_FONT_SIZE,
+        max_width,
+        bold=False,
+    )
+
+
+    lines = [
+        (
+            top_text,
+            top_font,
+        ),
+        (
+            buyer_text,
+            buyer_font,
+        ),
+        (
+            username_text,
+            username_font,
+        ),
+    ]
+
+
+    spacing = 14
+
+    measurements = []
+
+    total_height = 0
+
+
+    for text, font in lines:
+
+        bbox = draw.textbbox(
+            (0, 0),
+            text,
+            font=font,
+        )
+
+        width = (
+            bbox[2]
+            - bbox[0]
+        )
+
+        height = (
+            bbox[3]
+            - bbox[1]
+        )
+
+        measurements.append(
+            (
+                text,
+                font,
+                width,
+                height,
+            )
+        )
+
+        total_height += height
+
+
+    total_height += (
+        spacing
+        * (len(lines) - 1)
+    )
+
+
+    y = (
+        (LABEL_SIZE - total_height)
+        / 2
+        + VERTICAL_OFFSET
+    )
+
+
+    for (
+        text,
+        font,
+        width,
+        height,
+    ) in measurements:
+
+        x = (
+            LABEL_SIZE
+            - width
+        ) / 2
+
+        draw.text(
+            (
+                x,
+                y,
+            ),
+            text,
+            fill="black",
+            font=font,
+        )
+
+        y += (
+            height
+            + spacing
+        )
+
+
+    image.save(
+        output_path
+    )
+
+    return output_path
+
+
+def create_label(
+    item_number,
+    buyer_number,
+    username,
+):
+
+    safe_username = (
+        username
+        .replace("/", "_")
+        .replace("\\", "_")
+    )
+
+    file_name = (
+        f"item_{item_number:03d}"
+        f"_buyer_{buyer_number:02d}"
+        f"_{safe_username}.png"
+    )
+
+    output_path = (
+        LABELS_DIR
+        / file_name
+    )
+
+
+    return create_text_label(
+        f"ITEM {item_number:03d}",
         buyer_number,
+        username,
+        output_path,
+    )
+
+
+def create_givvy_label(
+    givvy_number,
+    buyer_number,
+    username,
+):
+
+    safe_username = (
+        username
+        .replace("/", "_")
+        .replace("\\", "_")
+    )
+
+    file_name = (
+        f"givvy_{givvy_number:02d}"
+        f"_buyer_{buyer_number:02d}"
+        f"_{safe_username}.png"
+    )
+
+    output_path = (
+        LABELS_DIR
+        / file_name
+    )
+
+
+    return create_text_label(
+        f"GIVVY {givvy_number:02d}",
+        buyer_number,
+        username,
+        output_path,
+    )
+
+
+# ============================================================
+# PRINTING
+# ============================================================
+
+def print_label(file_path):
+
+    printer_dc = None
+
+    try:
+
+        image = Image.open(
+            file_path
+        ).convert(
+            "RGB"
+        )
+
+
+        printer_dc = (
+            win32ui.CreateDC()
+        )
+
+        printer_dc.CreatePrinterDC(
+            PRINTER_NAME
+        )
+
+
+        printable_width = (
+            printer_dc.GetDeviceCaps(8)
+        )
+
+        printable_height = (
+            printer_dc.GetDeviceCaps(10)
+        )
+
+
+        dib = ImageWin.Dib(
+            image
+        )
+
+
+        printer_dc.StartDoc(
+            "LodeLabels"
+        )
+
+        printer_dc.StartPage()
+
+
+        dib.draw(
+            printer_dc.GetHandleOutput(),
+            (
+                0,
+                0,
+                printable_width,
+                printable_height,
+            ),
+        )
+
+
+        printer_dc.EndPage()
+
+        printer_dc.EndDoc()
+
+
+        print(
+            f"Printed: {file_path}"
+        )
+
+
+    except Exception as error:
+
+        print(
+            f"Print error: {error!r}"
+        )
+
+        raise
+
+
+    finally:
+
+        if printer_dc is not None:
+
+            try:
+                printer_dc.DeleteDC()
+
+            except Exception:
+                pass
+
+
+# ============================================================
+# SALE PROCESSING
+# ============================================================
+
+def process_sale(username):
+
+    global item_number
+
+    username = clean_username(
         username
     )
 
-    print_label(label_path)
+    if not username:
+
+        print(
+            "No username provided."
+        )
+
+        return None
+
+
+    with session_lock:
+
+        buyer_number = (
+            get_buyer_number(
+                username
+            )
+        )
+
+        item_number += 1
+
+        save_session()
+
+
+        label_path = create_label(
+            item_number,
+            buyer_number,
+            username,
+        )
+
+
+    # Printing stays outside the session lock.
+    print_label(
+        label_path
+    )
+
 
     print(
         f"Item #{item_number:03d} | "
@@ -567,63 +685,110 @@ def process_sale(username):
         f"{username}"
     )
 
-    print(f"Label created: {label_path}")
-
-def process_auto_sale(username):
-    if not auto_print_enabled:
-        print(
-            f"Auto sale ignored: {username} "
-            f"(Auto Print OFF)"
-        )
-        return
-
     print(
-        f"Auto sale accepted: {username}"
+        f"Label created: {label_path}"
     )
 
-    process_sale(username)
+
+    return label_path
+
+
 def handle_sale():
-    username = get_clipboard_text()
 
-    process_sale(username)
+    username = (
+        get_clipboard_text()
+    )
 
-
-# -------------------------
-# Giveaway event
-# -------------------------
-
-def handle_givvy():
-    global givvy_number
-
-    username = get_clipboard_text()
-
-    if username == "":
-        print("No username found in clipboard.")
-        return
-
-    buyer_number = get_buyer_number(username)
-
-    givvy_number += 1
-    save_session()
-
-    label_path = create_givvy_label(
-        givvy_number,
-        buyer_number,
+    process_sale(
         username
     )
 
-    print_label(label_path)
+
+# ============================================================
+# GIVVY PROCESSING
+# ============================================================
+
+def process_givvy(username):
+
+    global givvy_number
+
+    username = clean_username(
+        username
+    )
+
+    if not username:
+
+        print(
+            "No username provided."
+        )
+
+        return None
+
+
+    with session_lock:
+
+        buyer_number = (
+            get_buyer_number(
+                username
+            )
+        )
+
+        givvy_number += 1
+
+        save_session()
+
+
+        label_path = (
+            create_givvy_label(
+                givvy_number,
+                buyer_number,
+                username,
+            )
+        )
+
+
+    print_label(
+        label_path
+    )
+
 
     print(
         f"Givvy #{givvy_number:02d} | "
-        f"Buyer #{buyer_number:02d}: {username}"
+        f"Buyer #{buyer_number:02d}: "
+        f"{username}"
     )
 
-    print(f"Givvy label created: {label_path}")
-def toggle_auto_print():
+    print(
+        f"Label created: {label_path}"
+    )
+
+
+    return label_path
+
+
+def handle_givvy():
+
+    username = (
+        get_clipboard_text()
+    )
+
+    process_givvy(
+        username
+    )
+
+
+# ============================================================
+# AUTO PRINT
+# ============================================================
+
+def set_auto_print(enabled):
+
     global auto_print_enabled
 
-    auto_print_enabled = not auto_print_enabled
+    auto_print_enabled = bool(
+        enabled
+    )
+
 
     status = (
         "ON"
@@ -631,66 +796,250 @@ def toggle_auto_print():
         else "OFF"
     )
 
+
     print()
-    print("==============================")
-    print(f"AUTO PRINT: {status}")
-    print("==============================")
+    print(
+        "=============================="
+    )
+    print(
+        f"AUTO PRINT: {status}"
+    )
+    print(
+        "=============================="
+    )
     print()
-sale_server = start_sale_listener(
-    process_auto_sale
-)
-# -------------------------
-# Program startup
-# -------------------------
-
-print("LodeLabels is running.")
-print(f"Printer: {PRINTER_NAME}")
-print(f"Session file: {SESSION_FILE}")
-print(f"Loaded {len(buyers)} existing buyers.")
-print(f"Current item number: {item_number}")
-print(f"Current givvy number: {givvy_number}")
-print()
-
-print("F8                Capture sale")
-print("Ctrl + G          Capture givvy")
-print("Ctrl + R          Reset item number")
-print("Ctrl + Shift + G  Reset givvy number")
-print("Ctrl + P          Print latest label")
-print("ESC               Quit")
-print("Ctrl+Alt+A = Toggle Auto Print")
-print("Auto Print starts OFF")
-
-# -------------------------
-# Hotkeys
-# -------------------------
-keyboard.add_hotkey(
-    "ctrl+alt+a",
-    toggle_auto_print
-)
-keyboard.add_hotkey(
-    "f8",
-    handle_sale
-)
-
-keyboard.add_hotkey(
-    "ctrl+g",
-    handle_givvy
-)
-
-keyboard.add_hotkey(
-    "ctrl+r",
-    reset_item_number
-)
-
-keyboard.add_hotkey(
-    "ctrl+shift+g",
-    reset_givvy_number
-)
-
-keyboard.add_hotkey(
-    "ctrl+p",
-    test_print_latest_label
-)
 
 
-keyboard.wait("esc")
+def toggle_auto_print():
+
+    set_auto_print(
+        not auto_print_enabled
+    )
+
+
+def process_auto_sale(username):
+
+    username = clean_username(
+        username
+    )
+
+
+    if not auto_print_enabled:
+
+        print(
+            f"Auto sale ignored: "
+            f"{username} "
+            f"(Auto Print OFF)"
+        )
+
+        return False
+
+
+    print(
+        f"Auto sale accepted: "
+        f"{username}"
+    )
+
+
+    process_sale(
+        username
+    )
+
+
+    return True
+
+
+# ============================================================
+# RESET FUNCTIONS
+# ============================================================
+
+def reset_item_number():
+
+    global item_number
+
+    item_number = 0
+
+    save_session()
+
+    print(
+        "Item number reset to 0."
+    )
+
+
+def reset_givvy_number():
+
+    global givvy_number
+
+    givvy_number = 0
+
+    save_session()
+
+    print(
+        "Givvy number reset to 0."
+    )
+
+
+# ============================================================
+# REPRINT
+# ============================================================
+
+def test_print_latest_label():
+
+    label_files = list(
+        LABELS_DIR.glob(
+            "*.png"
+        )
+    )
+
+
+    if not label_files:
+
+        print(
+            "No labels found."
+        )
+
+        return
+
+
+    # Actual newest file by modified time,
+    # rather than alphabetic filename order.
+    latest_label = max(
+        label_files,
+        key=lambda path: (
+            path.stat().st_mtime
+        ),
+    )
+
+
+    print(
+        f"Reprinting: "
+        f"{latest_label}"
+    )
+
+
+    print_label(
+        latest_label
+    )
+
+
+# ============================================================
+# CLI / HOTKEY MODE
+# ============================================================
+
+def run_cli():
+
+    keyboard.add_hotkey(
+        "f8",
+        handle_sale,
+    )
+
+    keyboard.add_hotkey(
+        "ctrl+g",
+        handle_givvy,
+    )
+
+    keyboard.add_hotkey(
+        "ctrl+r",
+        reset_item_number,
+    )
+
+    keyboard.add_hotkey(
+        "ctrl+shift+g",
+        reset_givvy_number,
+    )
+
+    keyboard.add_hotkey(
+        "ctrl+p",
+        test_print_latest_label,
+    )
+
+    keyboard.add_hotkey(
+        "ctrl+alt+a",
+        toggle_auto_print,
+    )
+
+
+    sale_server = (
+        start_sale_listener(
+            process_auto_sale
+        )
+    )
+
+
+    print()
+    print(
+        "=============================="
+    )
+    print(
+        "LODELABELS RUNNING"
+    )
+    print(
+        "=============================="
+    )
+
+    print(
+        f"Item #: {item_number}"
+    )
+
+    print(
+        f"Givvy #: {givvy_number}"
+    )
+
+    print(
+        f"Buyers: {len(buyers)}"
+    )
+
+    print()
+
+    print(
+        "F8 = Sale"
+    )
+
+    print(
+        "Ctrl+G = Givvy"
+    )
+
+    print(
+        "Ctrl+R = Reset Item #"
+    )
+
+    print(
+        "Ctrl+Shift+G = Reset Givvy #"
+    )
+
+    print(
+        "Ctrl+P = Reprint Latest"
+    )
+
+    print(
+        "Ctrl+Alt+A = Toggle Auto Print"
+    )
+
+    print(
+        "ESC = Quit"
+    )
+
+    print()
+    print(
+        "Auto Print starts OFF"
+    )
+    print()
+
+
+    # Keep reference alive for the
+    # duration of the program.
+    _ = sale_server
+
+
+    keyboard.wait(
+        "esc"
+    )
+
+
+# ============================================================
+# ENTRY POINT
+# ============================================================
+
+if __name__ == "__main__":
+
+    run_cli()

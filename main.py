@@ -14,7 +14,11 @@ from PIL import (
     ImageWin,
 )
 
-from sale_listener import start_sale_listener
+import history_db
+
+from sale_listener import (
+    start_sale_listener,
+)
 
 
 # ============================================================
@@ -25,12 +29,12 @@ PRINTER_NAME = "PPG A40 SD"
 
 PRINTER_DPI = 203
 
-# 2 inches × 203 DPI = 406 px
-LABEL_SIZE = int(2 * PRINTER_DPI)
+LABEL_SIZE = int(
+    2 * PRINTER_DPI
+)
 
 SAFE_MARGIN = 28
 
-# Moves all text slightly upward
 VERTICAL_OFFSET = -12
 
 ITEM_FONT_SIZE = 62
@@ -49,7 +53,9 @@ SESSIONS_DIR = Path("sessions")
 SESSIONS_DIR.mkdir(exist_ok=True)
 
 
-current_date = date.today().isoformat()
+current_date = (
+    date.today().isoformat()
+)
 
 SESSION_FILE = (
     SESSIONS_DIR
@@ -58,11 +64,16 @@ SESSION_FILE = (
 
 
 # ============================================================
-# SESSION STATE
+# DATABASE
 # ============================================================
 
-# Prevent two different inputs from modifying the session
-# at exactly the same time.
+history_db.init_db()
+
+
+# ============================================================
+# SESSION
+# ============================================================
+
 session_lock = Lock()
 
 
@@ -76,6 +87,7 @@ def load_session():
             "buyers": {},
         }
 
+
     try:
 
         with SESSION_FILE.open(
@@ -84,6 +96,7 @@ def load_session():
         ) as file:
 
             data = json.load(file)
+
 
     except (
         json.JSONDecodeError,
@@ -101,16 +114,17 @@ def load_session():
         }
 
 
-    # Backward compatibility with old sessions
     return {
         "item_number": data.get(
             "item_number",
             0,
         ),
+
         "givvy_number": data.get(
             "givvy_number",
             0,
         ),
+
         "buyers": data.get(
             "buyers",
             {},
@@ -119,6 +133,7 @@ def load_session():
 
 
 session = load_session()
+
 
 buyers = session.get(
     "buyers",
@@ -136,7 +151,6 @@ givvy_number = session.get(
 )
 
 
-# Automatic Whatnot sales start disabled
 auto_print_enabled = False
 
 
@@ -147,6 +161,7 @@ def save_session():
         "givvy_number": givvy_number,
         "buyers": buyers,
     }
+
 
     with SESSION_FILE.open(
         "w",
@@ -160,12 +175,12 @@ def save_session():
         )
 
 
-# Upgrade older session files immediately.
+# Upgrade old JSON automatically.
 save_session()
 
 
 # ============================================================
-# BUYER MANAGEMENT
+# BUYERS
 # ============================================================
 
 def get_next_buyer_number():
@@ -173,12 +188,17 @@ def get_next_buyer_number():
     if not buyers:
         return 1
 
-    return max(
-        buyers.values()
-    ) + 1
+    return (
+        max(
+            buyers.values()
+        )
+        + 1
+    )
 
 
-def get_buyer_number(username):
+def get_buyer_number(
+    username
+):
 
     if username not in buyers:
 
@@ -190,10 +210,12 @@ def get_buyer_number(username):
 
 
 # ============================================================
-# USERNAME CLEANUP
+# USERNAME HELPERS
 # ============================================================
 
-def clean_username(username):
+def clean_username(
+    username
+):
 
     if username is None:
         return ""
@@ -209,21 +231,24 @@ def clean_username(username):
 def get_clipboard_text():
 
     try:
+
         return clean_username(
             pyperclip.paste()
         )
 
+
     except Exception as error:
 
         print(
-            f"Clipboard error: {error!r}"
+            f"Clipboard error: "
+            f"{error!r}"
         )
 
         return ""
 
 
 # ============================================================
-# FONT HELPERS
+# FONTS
 # ============================================================
 
 def load_font(
@@ -263,12 +288,13 @@ def load_font(
             )
 
         except OSError:
+
             continue
 
 
     print(
         "Warning: Could not load "
-        "TrueType font. Using default."
+        "TrueType font."
     )
 
     return ImageFont.load_default()
@@ -283,6 +309,7 @@ def fit_font(
 ):
 
     size = starting_size
+
 
     while size >= 10:
 
@@ -302,8 +329,11 @@ def fit_font(
             - bbox[0]
         )
 
+
         if width <= max_width:
+
             return font
+
 
         size -= 2
 
@@ -315,7 +345,7 @@ def fit_font(
 
 
 # ============================================================
-# LABEL RENDERING
+# LABEL CREATION
 # ============================================================
 
 def create_text_label(
@@ -334,6 +364,7 @@ def create_text_label(
         "white",
     )
 
+
     draw = ImageDraw.Draw(
         image
     )
@@ -350,7 +381,9 @@ def create_text_label(
 
     max_width = (
         LABEL_SIZE
-        - (SAFE_MARGIN * 2)
+        - (
+            SAFE_MARGIN * 2
+        )
     )
 
 
@@ -362,6 +395,7 @@ def create_text_label(
         bold=True,
     )
 
+
     buyer_font = fit_font(
         draw,
         buyer_text,
@@ -370,12 +404,12 @@ def create_text_label(
         bold=True,
     )
 
+
     username_font = fit_font(
         draw,
         username_text,
         USERNAME_FONT_SIZE,
         max_width,
-        bold=False,
     )
 
 
@@ -434,12 +468,17 @@ def create_text_label(
 
     total_height += (
         spacing
-        * (len(lines) - 1)
+        * (
+            len(lines) - 1
+        )
     )
 
 
     y = (
-        (LABEL_SIZE - total_height)
+        (
+            LABEL_SIZE
+            - total_height
+        )
         / 2
         + VERTICAL_OFFSET
     )
@@ -457,6 +496,7 @@ def create_text_label(
             - width
         ) / 2
 
+
         draw.text(
             (
                 x,
@@ -467,6 +507,7 @@ def create_text_label(
             font=font,
         )
 
+
         y += (
             height
             + spacing
@@ -476,6 +517,7 @@ def create_text_label(
     image.save(
         output_path
     )
+
 
     return output_path
 
@@ -492,11 +534,13 @@ def create_label(
         .replace("\\", "_")
     )
 
+
     file_name = (
         f"item_{item_number:03d}"
         f"_buyer_{buyer_number:02d}"
         f"_{safe_username}.png"
     )
+
 
     output_path = (
         LABELS_DIR
@@ -524,11 +568,13 @@ def create_givvy_label(
         .replace("\\", "_")
     )
 
+
     file_name = (
         f"givvy_{givvy_number:02d}"
         f"_buyer_{buyer_number:02d}"
         f"_{safe_username}.png"
     )
+
 
     output_path = (
         LABELS_DIR
@@ -548,9 +594,12 @@ def create_givvy_label(
 # PRINTING
 # ============================================================
 
-def print_label(file_path):
+def print_label(
+    file_path
+):
 
     printer_dc = None
+
 
     try:
 
@@ -565,17 +614,22 @@ def print_label(file_path):
             win32ui.CreateDC()
         )
 
+
         printer_dc.CreatePrinterDC(
             PRINTER_NAME
         )
 
 
         printable_width = (
-            printer_dc.GetDeviceCaps(8)
+            printer_dc.GetDeviceCaps(
+                8
+            )
         )
 
         printable_height = (
-            printer_dc.GetDeviceCaps(10)
+            printer_dc.GetDeviceCaps(
+                10
+            )
         )
 
 
@@ -603,7 +657,6 @@ def print_label(file_path):
 
 
         printer_dc.EndPage()
-
         printer_dc.EndDoc()
 
 
@@ -615,7 +668,8 @@ def print_label(file_path):
     except Exception as error:
 
         print(
-            f"Print error: {error!r}"
+            f"Print error: "
+            f"{error!r}"
         )
 
         raise
@@ -626,23 +680,126 @@ def print_label(file_path):
         if printer_dc is not None:
 
             try:
+
                 printer_dc.DeleteDC()
 
             except Exception:
+
                 pass
+
+
+# ============================================================
+# HISTORY HELPERS
+# ============================================================
+
+def record_history(
+    label_type,
+    sequence_number,
+    buyer_number,
+    username,
+    label_path,
+):
+
+    try:
+
+        return history_db.add_label(
+            label_type=label_type,
+            sequence_number=sequence_number,
+            buyer_number=buyer_number,
+            username=username,
+            file_path=label_path,
+        )
+
+
+    except Exception as error:
+
+        print(
+            "History database error: "
+            f"{error!r}"
+        )
+
+        return None
+
+
+def get_recent_history(
+    limit=50
+):
+
+    return history_db.get_recent_labels(
+        limit
+    )
+
+
+def reprint_history_label(
+    label_id
+):
+
+    row = history_db.get_label(
+        label_id
+    )
+
+
+    if row is None:
+
+        raise ValueError(
+            "History record not found."
+        )
+
+
+    label_path = Path(
+        row["file_path"]
+    )
+
+
+    if not label_path.exists():
+
+        raise FileNotFoundError(
+            f"Label file no longer exists: "
+            f"{label_path}"
+        )
+
+
+    try:
+
+        print_label(
+            label_path
+        )
+
+        history_db.mark_print_success(
+            label_id
+        )
+
+
+    except Exception as error:
+
+        history_db.mark_print_failure(
+            label_id,
+            error,
+        )
+
+        raise
+
+
+    return history_db.get_label(
+        label_id
+    )
 
 
 # ============================================================
 # SALE PROCESSING
 # ============================================================
 
-def process_sale(username):
+def process_sale(
+    username
+):
 
     global item_number
+
 
     username = clean_username(
         username
     )
+
 
     if not username:
 
@@ -661,46 +818,80 @@ def process_sale(username):
             )
         )
 
+
         item_number += 1
+
+        sequence_number = (
+            item_number
+        )
+
 
         save_session()
 
 
         label_path = create_label(
-            item_number,
+            sequence_number,
             buyer_number,
             username,
         )
 
 
-    # Printing stays outside the session lock.
-    print_label(
-        label_path
+    history_id = record_history(
+        label_type="sale",
+        sequence_number=sequence_number,
+        buyer_number=buyer_number,
+        username=username,
+        label_path=label_path,
     )
 
 
+    try:
+
+        print_label(
+            label_path
+        )
+
+
+        if history_id is not None:
+
+            history_db.mark_print_success(
+                history_id
+            )
+
+
+    except Exception as error:
+
+        if history_id is not None:
+
+            history_db.mark_print_failure(
+                history_id,
+                error,
+            )
+
+        raise
+
+
     print(
-        f"Item #{item_number:03d} | "
+        f"Item #{sequence_number:03d} | "
         f"Buyer #{buyer_number:02d}: "
         f"{username}"
     )
 
-    print(
-        f"Label created: {label_path}"
-    )
 
-
-    return label_path
+    return {
+        "history_id": history_id,
+        "type": "sale",
+        "sequence_number": sequence_number,
+        "buyer_number": buyer_number,
+        "username": username,
+        "file_path": label_path,
+    }
 
 
 def handle_sale():
 
-    username = (
-        get_clipboard_text()
-    )
-
     process_sale(
-        username
+        get_clipboard_text()
     )
 
 
@@ -708,13 +899,17 @@ def handle_sale():
 # GIVVY PROCESSING
 # ============================================================
 
-def process_givvy(username):
+def process_givvy(
+    username
+):
 
     global givvy_number
+
 
     username = clean_username(
         username
     )
+
 
     if not username:
 
@@ -733,47 +928,82 @@ def process_givvy(username):
             )
         )
 
+
         givvy_number += 1
+
+        sequence_number = (
+            givvy_number
+        )
+
 
         save_session()
 
 
         label_path = (
             create_givvy_label(
-                givvy_number,
+                sequence_number,
                 buyer_number,
                 username,
             )
         )
 
 
-    print_label(
-        label_path
+    history_id = record_history(
+        label_type="givvy",
+        sequence_number=sequence_number,
+        buyer_number=buyer_number,
+        username=username,
+        label_path=label_path,
     )
 
 
+    try:
+
+        print_label(
+            label_path
+        )
+
+
+        if history_id is not None:
+
+            history_db.mark_print_success(
+                history_id
+            )
+
+
+    except Exception as error:
+
+        if history_id is not None:
+
+            history_db.mark_print_failure(
+                history_id,
+                error,
+            )
+
+        raise
+
+
     print(
-        f"Givvy #{givvy_number:02d} | "
+        f"Givvy #{sequence_number:02d} | "
         f"Buyer #{buyer_number:02d}: "
         f"{username}"
     )
 
-    print(
-        f"Label created: {label_path}"
-    )
 
-
-    return label_path
+    return {
+        "history_id": history_id,
+        "type": "givvy",
+        "sequence_number": sequence_number,
+        "buyer_number": buyer_number,
+        "username": username,
+        "file_path": label_path,
+    }
 
 
 def handle_givvy():
 
-    username = (
-        get_clipboard_text()
-    )
-
     process_givvy(
-        username
+        get_clipboard_text()
     )
 
 
@@ -781,9 +1011,12 @@ def handle_givvy():
 # AUTO PRINT
 # ============================================================
 
-def set_auto_print(enabled):
+def set_auto_print(
+    enabled
+):
 
     global auto_print_enabled
+
 
     auto_print_enabled = bool(
         enabled
@@ -817,7 +1050,9 @@ def toggle_auto_print():
     )
 
 
-def process_auto_sale(username):
+def process_auto_sale(
+    username
+):
 
     username = clean_username(
         username
@@ -850,7 +1085,7 @@ def process_auto_sale(username):
 
 
 # ============================================================
-# RESET FUNCTIONS
+# RESETS
 # ============================================================
 
 def reset_item_number():
@@ -880,10 +1115,29 @@ def reset_givvy_number():
 
 
 # ============================================================
-# REPRINT
+# REPRINT LATEST
 # ============================================================
 
 def test_print_latest_label():
+
+    rows = (
+        history_db.get_recent_labels(
+            1
+        )
+    )
+
+
+    if rows:
+
+        reprint_history_label(
+            rows[0]["id"]
+        )
+
+        return
+
+
+    # Fallback for labels created
+    # before SQLite history existed.
 
     label_files = list(
         LABELS_DIR.glob(
@@ -901,19 +1155,11 @@ def test_print_latest_label():
         return
 
 
-    # Actual newest file by modified time,
-    # rather than alphabetic filename order.
     latest_label = max(
         label_files,
         key=lambda path: (
             path.stat().st_mtime
         ),
-    )
-
-
-    print(
-        f"Reprinting: "
-        f"{latest_label}"
     )
 
 
@@ -923,7 +1169,7 @@ def test_print_latest_label():
 
 
 # ============================================================
-# CLI / HOTKEY MODE
+# CLI MODE
 # ============================================================
 
 def run_cli():
@@ -966,15 +1212,8 @@ def run_cli():
     )
 
 
-    print()
     print(
-        "=============================="
-    )
-    print(
-        "LODELABELS RUNNING"
-    )
-    print(
-        "=============================="
+        "LodeLabels running."
     )
 
     print(
@@ -989,45 +1228,11 @@ def run_cli():
         f"Buyers: {len(buyers)}"
     )
 
-    print()
-
     print(
-        "F8 = Sale"
+        "Auto Print starts OFF."
     )
 
-    print(
-        "Ctrl+G = Givvy"
-    )
 
-    print(
-        "Ctrl+R = Reset Item #"
-    )
-
-    print(
-        "Ctrl+Shift+G = Reset Givvy #"
-    )
-
-    print(
-        "Ctrl+P = Reprint Latest"
-    )
-
-    print(
-        "Ctrl+Alt+A = Toggle Auto Print"
-    )
-
-    print(
-        "ESC = Quit"
-    )
-
-    print()
-    print(
-        "Auto Print starts OFF"
-    )
-    print()
-
-
-    # Keep reference alive for the
-    # duration of the program.
     _ = sale_server
 
 
@@ -1037,7 +1242,7 @@ def run_cli():
 
 
 # ============================================================
-# ENTRY POINT
+# ENTRY
 # ============================================================
 
 if __name__ == "__main__":

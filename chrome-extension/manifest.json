@@ -1,0 +1,22 @@
+
+{
+  "manifest_version": 3,
+  "name": "LodeLabels Whatnot Listener",
+  "version": "0.1.0",
+  "description": "Local experimental bridge between Whatnot live sales and LodeLabels.",
+  "host_permissions": [
+    "http://127.0.0.1:8765/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.whatnot.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
+

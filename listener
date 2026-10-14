@@ -1,0 +1,108 @@
+(() => {
+    // Kill any previous LodeLabels watcher
+    if (window.__lodeObserver) {
+        window.__lodeObserver.disconnect();
+    }
+
+    window.__lodeLastDetection = {
+        username: null,
+        time: 0
+    };
+
+    function checkText(text) {
+        if (!text) {
+            return;
+        }
+
+        text = text
+            .trim()
+            .replace(/\s+/g, " ");
+
+        const match = text.match(
+            /(?:^|\s)([A-Za-z0-9_.-]+) won the auction!/
+        );
+
+        if (!match) {
+            return;
+        }
+
+        const username = match[1];
+        const now = Date.now();
+
+        // Ignore duplicate renders of the same toast for 2 seconds
+        if (
+            username === window.__lodeLastDetection.username &&
+            now - window.__lodeLastDetection.time < 2000
+        ) {
+            return;
+        }
+
+        window.__lodeLastDetection = {
+            username: username,
+            time: now
+        };
+
+        console.log(
+    "🔥 LodeLabels SALE:",
+    username
+);
+
+fetch(
+    "http://127.0.0.1:8765/sale",
+    {
+        method: "POST",
+        headers: {
+            "Content-Type": "text/plain"
+        },
+        body: username
+    }
+)
+.then(response => {
+    console.log(
+        "LodeLabels sent:",
+        username,
+        response.status
+    );
+})
+.catch(error => {
+    console.error(
+        "LodeLabels bridge failed:",
+        error
+    );
+});
+    }
+
+    window.__lodeObserver = new MutationObserver((mutations) => {
+        for (const mutation of mutations) {
+
+            // Text directly changed
+            if (mutation.type === "characterData") {
+                checkText(mutation.target.textContent);
+            }
+
+            // New elements/text added
+            for (const node of mutation.addedNodes) {
+
+                if (node.nodeType === Node.TEXT_NODE) {
+                    checkText(node.textContent);
+                    continue;
+                }
+
+                if (node instanceof Element) {
+                    checkText(node.textContent);
+                }
+            }
+        }
+    });
+
+    window.__lodeObserver.observe(
+        document.body,
+        {
+            childList: true,
+            subtree: true,
+            characterData: true
+        }
+    );
+
+    console.log("🔥 LodeLabels watcher ACTIVE");
+})();

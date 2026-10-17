@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QDoubleSpinBox,
     QSpinBox,
     QSplitter,
     QTableWidget,
@@ -90,6 +91,21 @@ class MainWindow(QMainWindow):
 
     def load_label_settings(self):
 
+        self.backend.set_label_dimensions(
+            float(
+                self.settings.value(
+                    "label/width_inches",
+                    self.backend.LABEL_WIDTH_INCHES
+                )
+            ),
+            float(
+                self.settings.value(
+                    "label/height_inches",
+                    self.backend.LABEL_HEIGHT_INCHES
+                )
+            ),
+        )
+
         self.backend.SAFE_MARGIN = int(
             self.settings.value(
                 "label/safe_margin",
@@ -128,6 +144,11 @@ class MainWindow(QMainWindow):
 
     def save_label_settings(self):
 
+        self.backend.set_label_dimensions(
+            self.label_width_spin.value(),
+            self.label_height_spin.value(),
+        )
+
         self.backend.SAFE_MARGIN = (
             self.safe_margin_spin.value()
         )
@@ -146,6 +167,16 @@ class MainWindow(QMainWindow):
 
         self.backend.USERNAME_FONT_SIZE = (
             self.username_font_spin.value()
+        )
+
+        self.settings.setValue(
+            "label/width_inches",
+            self.backend.LABEL_WIDTH_INCHES
+        )
+
+        self.settings.setValue(
+            "label/height_inches",
+            self.backend.LABEL_HEIGHT_INCHES
         )
 
         self.settings.setValue(
@@ -179,6 +210,14 @@ class MainWindow(QMainWindow):
 
 
     def reset_layout_defaults(self):
+
+        self.label_width_spin.setValue(
+            2.0
+        )
+
+        self.label_height_spin.setValue(
+            2.0
+        )
 
         self.safe_margin_spin.setValue(
             28
@@ -764,6 +803,54 @@ class MainWindow(QMainWindow):
         settings_layout = QFormLayout()
 
 
+        self.label_width_spin = QDoubleSpinBox()
+
+        self.label_width_spin.setRange(
+            0.50,
+            4.25
+        )
+
+        self.label_width_spin.setDecimals(
+            2
+        )
+
+        self.label_width_spin.setSingleStep(
+            0.25
+        )
+
+        self.label_width_spin.setSuffix(
+            " in"
+        )
+
+        self.label_width_spin.setValue(
+            self.backend.LABEL_WIDTH_INCHES
+        )
+
+
+        self.label_height_spin = QDoubleSpinBox()
+
+        self.label_height_spin.setRange(
+            0.50,
+            6.00
+        )
+
+        self.label_height_spin.setDecimals(
+            2
+        )
+
+        self.label_height_spin.setSingleStep(
+            0.25
+        )
+
+        self.label_height_spin.setSuffix(
+            " in"
+        )
+
+        self.label_height_spin.setValue(
+            self.backend.LABEL_HEIGHT_INCHES
+        )
+
+
         self.safe_margin_spin = QSpinBox()
 
         self.safe_margin_spin.setRange(
@@ -827,6 +914,16 @@ class MainWindow(QMainWindow):
             self.backend.USERNAME_FONT_SIZE
         )
 
+
+        settings_layout.addRow(
+            "Label Width:",
+            self.label_width_spin
+        )
+
+        settings_layout.addRow(
+            "Label Height:",
+            self.label_height_spin
+        )
 
         settings_layout.addRow(
             "Safe Margin:",
@@ -1122,6 +1219,8 @@ class MainWindow(QMainWindow):
 
 
         for spin_box in (
+            self.label_width_spin,
+            self.label_height_spin,
             self.safe_margin_spin,
             self.vertical_offset_spin,
             self.item_font_spin,

@@ -28,7 +28,10 @@ from sale_listener import (
 PRINTER_NAME = "PPG A40 SD"
 
 PRINTER_DPI = 203
-LABEL_SIZE = int(2 * PRINTER_DPI)
+
+# Label size can be changed from the GUI.
+LABEL_WIDTH_INCHES = 2.0
+LABEL_HEIGHT_INCHES = 2.0
 
 SAFE_MARGIN = 28
 VERTICAL_OFFSET = -12
@@ -36,6 +39,71 @@ VERTICAL_OFFSET = -12
 ITEM_FONT_SIZE = 62
 BUYER_FONT_SIZE = 34
 USERNAME_FONT_SIZE = 30
+
+
+# ============================================================
+# LABEL SIZE HELPERS
+# ============================================================
+
+def get_label_pixel_size():
+
+    width = max(
+        1,
+        round(
+            LABEL_WIDTH_INCHES
+            * PRINTER_DPI
+        ),
+    )
+
+    height = max(
+        1,
+        round(
+            LABEL_HEIGHT_INCHES
+            * PRINTER_DPI
+        ),
+    )
+
+    return (
+        width,
+        height,
+    )
+
+
+def set_label_dimensions(
+    width_inches,
+    height_inches,
+):
+
+    global LABEL_WIDTH_INCHES
+    global LABEL_HEIGHT_INCHES
+
+    width_inches = float(
+        width_inches
+    )
+
+    height_inches = float(
+        height_inches
+    )
+
+    if width_inches <= 0:
+
+        raise ValueError(
+            "Label width must be greater than 0."
+        )
+
+    if height_inches <= 0:
+
+        raise ValueError(
+            "Label height must be greater than 0."
+        )
+
+    LABEL_WIDTH_INCHES = (
+        width_inches
+    )
+
+    LABEL_HEIGHT_INCHES = (
+        height_inches
+    )
 
 
 # ============================================================
@@ -48,7 +116,9 @@ LABELS_DIR.mkdir(exist_ok=True)
 SESSIONS_DIR = Path("sessions")
 SESSIONS_DIR.mkdir(exist_ok=True)
 
-current_date = date.today().isoformat()
+current_date = (
+    date.today().isoformat()
+)
 
 SESSION_FILE = (
     SESSIONS_DIR
@@ -154,7 +224,6 @@ stored_next_buyer_number = (
 )
 
 
-# Backward compatibility for older session JSON files.
 if stored_next_buyer_number is None:
 
     next_buyer_number = (
@@ -199,7 +268,6 @@ def save_session():
         )
 
 
-# Automatically upgrade older session files.
 save_session()
 
 
@@ -353,87 +421,13 @@ def fit_font(
     )
 
 
-# ============================================================
-# LABEL CREATION
-# ============================================================
-
-def create_text_label(
-    top_text,
-    buyer_number,
-    username,
-    output_path,
+def measure_lines(
+    draw,
+    lines,
+    spacing,
 ):
 
-    image = Image.new(
-        "RGB",
-        (
-            LABEL_SIZE,
-            LABEL_SIZE,
-        ),
-        "white",
-    )
-
-    draw = ImageDraw.Draw(
-        image
-    )
-
-    buyer_text = (
-        f"B#{buyer_number:02d}"
-    )
-
-    username_text = (
-        f"@{username}"
-    )
-
-    max_width = (
-        LABEL_SIZE
-        - (
-            SAFE_MARGIN * 2
-        )
-    )
-
-    top_font = fit_font(
-        draw,
-        top_text,
-        ITEM_FONT_SIZE,
-        max_width,
-        bold=True,
-    )
-
-    buyer_font = fit_font(
-        draw,
-        buyer_text,
-        BUYER_FONT_SIZE,
-        max_width,
-        bold=True,
-    )
-
-    username_font = fit_font(
-        draw,
-        username_text,
-        USERNAME_FONT_SIZE,
-        max_width,
-    )
-
-    lines = [
-        (
-            top_text,
-            top_font,
-        ),
-        (
-            buyer_text,
-            buyer_font,
-        ),
-        (
-            username_text,
-            username_font,
-        ),
-    ]
-
-    spacing = 14
-
     measurements = []
-
     total_height = 0
 
     for text, font in lines:
@@ -472,14 +466,246 @@ def create_text_label(
         )
     )
 
+    return (
+        measurements,
+        total_height,
+    )
+
+
+# ============================================================
+# LABEL CREATION
+# ============================================================
+
+def create_text_label(
+    top_text,
+    buyer_number,
+    username,
+    output_path,
+):
+
+    label_width, label_height = (
+        get_label_pixel_size()
+    )
+
+    image = Image.new(
+        "RGB",
+        (
+            label_width,
+            label_height,
+        ),
+        "white",
+    )
+
+    draw = ImageDraw.Draw(
+        image
+    )
+
+    buyer_text = (
+        f"B#{buyer_number:02d}"
+    )
+
+    username_text = (
+        f"@{username}"
+    )
+
+    # Prevent margins from consuming the whole label
+    # when using short continuous-stock labels.
+    horizontal_margin = min(
+        SAFE_MARGIN,
+        max(
+            0,
+            (label_width - 20) // 2,
+        ),
+    )
+
+    max_width = max(
+        20,
+        label_width
+        - (
+            horizontal_margin * 2
+        ),
+    )
+
+    top_font = fit_font(
+        draw,
+        top_text,
+        ITEM_FONT_SIZE,
+        max_width,
+        bold=True,
+    )
+
+    buyer_font = fit_font(
+        draw,
+        buyer_text,
+        BUYER_FONT_SIZE,
+        max_width,
+        bold=True,
+    )
+
+    username_font = fit_font(
+        draw,
+        username_text,
+        USERNAME_FONT_SIZE,
+        max_width,
+    )
+
+    spacing = 14
+
+    lines = [
+        (
+            top_text,
+            top_font,
+        ),
+        (
+            buyer_text,
+            buyer_font,
+        ),
+        (
+            username_text,
+            username_font,
+        ),
+    ]
+
+    measurements, total_height = (
+        measure_lines(
+            draw,
+            lines,
+            spacing,
+        )
+    )
+
+    # If the label is shorter than 2 inches, automatically
+    # shrink the whole text block vertically so nothing clips.
+    vertical_margin = min(
+        SAFE_MARGIN,
+        max(
+            4,
+            (label_height - 20) // 2,
+        ),
+    )
+
+    max_text_height = max(
+        30,
+        label_height
+        - (
+            vertical_margin * 2
+        ),
+    )
+
+    if (
+        total_height
+        > max_text_height
+    ):
+
+        scale = (
+            max_text_height
+            / total_height
+        )
+
+        top_size = max(
+            10,
+            round(
+                getattr(
+                    top_font,
+                    "size",
+                    ITEM_FONT_SIZE
+                )
+                * scale
+            ),
+        )
+
+        buyer_size = max(
+            10,
+            round(
+                getattr(
+                    buyer_font,
+                    "size",
+                    BUYER_FONT_SIZE
+                )
+                * scale
+            ),
+        )
+
+        username_size = max(
+            10,
+            round(
+                getattr(
+                    username_font,
+                    "size",
+                    USERNAME_FONT_SIZE
+                )
+                * scale
+            ),
+        )
+
+        spacing = max(
+            4,
+            round(
+                spacing
+                * scale
+            ),
+        )
+
+        top_font = fit_font(
+            draw,
+            top_text,
+            top_size,
+            max_width,
+            bold=True,
+        )
+
+        buyer_font = fit_font(
+            draw,
+            buyer_text,
+            buyer_size,
+            max_width,
+            bold=True,
+        )
+
+        username_font = fit_font(
+            draw,
+            username_text,
+            username_size,
+            max_width,
+        )
+
+        lines = [
+            (
+                top_text,
+                top_font,
+            ),
+            (
+                buyer_text,
+                buyer_font,
+            ),
+            (
+                username_text,
+                username_font,
+            ),
+        ]
+
+        measurements, total_height = (
+            measure_lines(
+                draw,
+                lines,
+                spacing,
+            )
+        )
+
     y = (
         (
-            LABEL_SIZE
+            label_height
             - total_height
         )
         / 2
         + VERTICAL_OFFSET
     )
+
+    # Keep extreme offsets from pushing everything
+    # completely outside a short label.
+    if y < 0:
+
+        y = 0
 
     for (
         text,
@@ -489,7 +715,7 @@ def create_text_label(
     ) in measurements:
 
         x = (
-            LABEL_SIZE
+            label_width
             - width
         ) / 2
 
@@ -615,6 +841,57 @@ def print_label(
             )
         )
 
+        printer_dpi_x = (
+            printer_dc.GetDeviceCaps(
+                88
+            )
+        )
+
+        printer_dpi_y = (
+            printer_dc.GetDeviceCaps(
+                90
+            )
+        )
+
+        # Derive the physical size from the saved PNG itself.
+        # This means old 2x2 labels still reprint as 2x2 even
+        # after the current label setting changes to 2x1.
+        image_width_inches = (
+            image.width
+            / PRINTER_DPI
+        )
+
+        image_height_inches = (
+            image.height
+            / PRINTER_DPI
+        )
+
+        target_width = round(
+            image_width_inches
+            * printer_dpi_x
+        )
+
+        target_height = round(
+            image_height_inches
+            * printer_dpi_y
+        )
+
+        target_width = min(
+            printable_width,
+            max(
+                1,
+                target_width,
+            ),
+        )
+
+        target_height = min(
+            printable_height,
+            max(
+                1,
+                target_height,
+            ),
+        )
+
         dib = ImageWin.Dib(
             image
         )
@@ -625,13 +902,17 @@ def print_label(
 
         printer_dc.StartPage()
 
+        # Top-left alignment is intentional for continuous stock:
+        # if the Windows driver page is longer than the requested
+        # label, the printed content begins at the top for easier
+        # manual cutting.
         dib.draw(
             printer_dc.GetHandleOutput(),
             (
                 0,
                 0,
-                printable_width,
-                printable_height,
+                target_width,
+                target_height,
             ),
         )
 
@@ -1060,8 +1341,6 @@ def set_next_item_number(
 
     with session_lock:
 
-        # Sale processing increments the stored value before
-        # creating the label.
         item_number = (
             next_number - 1
         )
@@ -1202,7 +1481,6 @@ def test_print_latest_label():
 
         return
 
-    # Fallback for labels created before SQLite history existed.
     label_files = list(
         LABELS_DIR.glob(
             "*.png"
